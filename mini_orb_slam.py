@@ -3,6 +3,8 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 from matplotlib import animation
+import glob
+from bisect import bisect_left
 
 # -- SETTINGS --
 IMAGE_DIR = "rgbd_dataset_freiburg1_xyz/rgb"
@@ -39,45 +41,25 @@ def triangulate_filtered(R, t, kp1, kp2):
     proj1 = CAMERA_MATRIX @ np.hstack((np.eye(3), np.zeros((3, 1))))
     proj2 = CAMERA_MATRIX @ np.hstack((R, t))
 
-    # Ensure 2xN shape and float32 type
     if kp1.ndim != 2 or kp2.ndim != 2 or kp1.shape[0] < 2:
-        return np.empty((0, 3))  # return empty if data is malformed
+        return np.empty((0, 3))
 
-    kp1 = kp1.T.astype(np.float32)  # Shape: (2, N)
-    kp2 = kp2.T.astype(np.float32)  # Shape: (2, N)
+    kp1 = kp1.T.astype(np.float32)
+    kp2 = kp2.T.astype(np.float32)
 
     if kp1.shape[1] < 8 or kp2.shape[1] < 8:
-        return np.empty((0, 3))  # not enough points to triangulate
+        return np.empty((0, 3))
 
     pts4d = cv2.triangulatePoints(proj1, proj2, kp1, kp2)
-    pts3d = pts4d[:3] / pts4d[3]  # Convert from homogeneous
-    pts3d = pts3d.T  # Shape: (N, 3)
+    pts3d = pts4d[:3] / pts4d[3]
+    pts3d = pts3d.T
 
-    # Filter out bad points
     valid = pts3d[:, 2] > 0
     valid = np.logical_and(valid, np.linalg.norm(pts3d, axis=1) < 10)
 
     return pts3d[valid]
 
-def load_ground_truth(path):
-    poses = []
-    with open(path, 'r') as f:
-        for line in f:
-            if line.startswith('#') or not line.strip():
-                continue
-            tokens = line.strip().split()
-            if len(tokens) != 8:
-                continue
-            time, x, y, z, qx, qy, qz, qw = map(float, tokens)
-            poses.append([x, y, z])
-    return np.array(poses)
-
-
 def load_ground_truth_aligned(gt_path, image_folder):
-    import glob
-    from bisect import bisect_left
-
-    # Step 1: Load ground truth
     gt_data = {}
     with open(gt_path, 'r') as f:
         for line in f:
@@ -91,23 +73,19 @@ def load_ground_truth_aligned(gt_path, image_folder):
 
     gt_times = sorted(gt_data.keys())
 
-    # Step 2: Get image timestamps
     image_files = sorted(glob.glob(os.path.join(image_folder, "*.png")))
     image_times = [float(os.path.splitext(os.path.basename(f))[0]) for f in image_files]
 
-    # Step 3: Find closest ground truth pose for each image timestamp
     aligned_poses = []
     for t_img in image_times:
         idx = bisect_left(gt_times, t_img)
         if idx == 0 or idx >= len(gt_times):
             continue
-        # Get closer one of two adjacent timestamps
         t1, t2 = gt_times[idx - 1], gt_times[idx]
         t_gt = t1 if abs(t_img - t1) < abs(t_img - t2) else t2
         aligned_poses.append(gt_data[t_gt])
 
     return np.array(aligned_poses)
-
 
 def plot_trajectory_and_map_animated(trajectory, map_points, ground_truth=None):
     trajectory = np.array(trajectory)
@@ -180,8 +158,22 @@ def run_mini_slam(ground_truth=None):
 
     MIN_TRANSLATION = 0.1
 
+    # ★ Matplotlibでリアルタイム表示の準備
+    fig, ax = plt.subplots()
+    img_plot = ax.imshow(np.zeros_like(images[0]), cmap='gray')
+    ax.axis('off')
+
+    plt.ion()
+    plt.show()
+
     for i in range(1, len(images)):
         curr_img = images[i]
+
+        # ★画像を更新して表示
+        img_plot.set_data(curr_img)
+        fig.canvas.draw()
+        fig.canvas.flush_events()
+
         curr_kp, curr_des = extract_features(curr_img, orb)
         if curr_des is None or last_kf_des is None:
             continue
@@ -218,13 +210,10 @@ def run_mini_slam(ground_truth=None):
             print(f"[Frame {i}] Too small movement: Δ = {translation_movement:.3f}")
 
     print(f"✅ Keyframes: {len(trajectory)}, Map points: {len(map_points)}")
+    plt.ioff()
     plot_trajectory_and_map_animated(trajectory, map_points, ground_truth)
 
-
-
-
 if __name__ == "__main__":
-    ground_truth = load_ground_truth_aligned("rgbd_dataset_freiburg1_xyz/groundtruth.txt",
-                                              "rgbd_dataset_freiburg1_xyz/rgb")
+    ground_truth = load_ground_truth_aligned(GROUND_TRUTH_PATH, IMAGE_DIR)
     print(f"Loaded {len(ground_truth)} aligned ground truth poses.")
     run_mini_slam(ground_truth)
