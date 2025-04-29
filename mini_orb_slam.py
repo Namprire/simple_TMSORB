@@ -109,7 +109,7 @@ def load_ground_truth_aligned(gt_path, image_folder):
     return np.array(aligned_poses)
 
 
-def plot_trajectory_and_map_animated(trajectory, map_points, ground_truth=None):
+def plot_trajectory_and_map_animated(trajectory, map_points, ground_truth=None, save_path=None):
     trajectory = np.array(trajectory)
     map_points = np.array(map_points)
     if ground_truth is not None:
@@ -161,6 +161,9 @@ def plot_trajectory_and_map_animated(trajectory, map_points, ground_truth=None):
 
     ani = animation.FuncAnimation(fig, update, frames=len(trajectory),
                                   init_func=init, interval=100, blit=False)
+
+    if save_path:
+        ani.save(save_path, writer='pillow', fps=10)  # Save as GIF
 
     plt.tight_layout()
     plt.show()
@@ -219,6 +222,8 @@ def run_mini_slam(ground_truth=None):
 
     print(f"✅ Keyframes: {len(trajectory)}, Map points: {len(map_points)}")
     plot_trajectory_and_map_animated(trajectory, map_points, ground_truth)
+
+
 
 
 
