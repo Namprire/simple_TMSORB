@@ -4,12 +4,9 @@ import os
 import matplotlib.pyplot as plt
 import open3d as o3d
 from matplotlib import animation
-import glob
-from bisect import bisect_left
 
 # -- SETTINGS --
 IMAGE_DIR = "rgbd_dataset_freiburg1_xyz/rgb"  # Set this!
-GROUND_TRUTH_PATH = "rgbd_dataset_freiburg1_xyz/groundtruth.txt"  # Added ground truth path
 CAMERA_MATRIX = np.array([[517.3, 0, 318.6],
                           [0, 516.5, 255.3],
                           [0, 0, 1]])  # fx, fy, cx, cy from TUM dataset
@@ -83,124 +80,28 @@ def visualize_frame_results(curr_frame, curr_kp, matches_img):
     cv2.imshow('Feature Matches', matches_img)
     cv2.waitKey(1)
 
-def load_ground_truth_aligned(gt_path, image_folder):
-    """Load and align ground truth data with image timestamps"""
-    gt_data = {}
-    with open(gt_path, 'r') as f:
-        for line in f:
-            if line.startswith("#"):
-                continue
-            tokens = line.strip().split()
-            if len(tokens) != 8:
-                continue
-            t, x, y, z, qx, qy, qz, qw = map(float, tokens)
-            # Store both position and orientation
-            gt_data[t] = {
-                'position': [x, y, z],
-                'quaternion': [qx, qy, qz, qw]
-            }
-
-    gt_times = sorted(gt_data.keys())
-
-    image_files = sorted(glob.glob(os.path.join(image_folder, "*.png")))
-    image_times = [float(os.path.splitext(os.path.basename(f))[0]) for f in image_files]
-
-    aligned_poses = []
-    for t_img in image_times:
-        idx = bisect_left(gt_times, t_img)
-        if idx == 0 or idx >= len(gt_times):
-            continue
-        t1, t2 = gt_times[idx - 1], gt_times[idx]
-        t_gt = t1 if abs(t_img - t1) < abs(t_img - t2) else t2
-        aligned_poses.append(gt_data[t_gt]['position'])
-
-    return np.array(aligned_poses)
-
-def quaternion_to_rotation_matrix(q):
-    """Convert quaternion to rotation matrix"""
-    qx, qy, qz, qw = q
-    R = np.array([
-        [1 - 2*qy**2 - 2*qz**2, 2*qx*qy - 2*qz*qw, 2*qx*qz + 2*qy*qw],
-        [2*qx*qy + 2*qz*qw, 1 - 2*qx**2 - 2*qz**2, 2*qy*qz - 2*qx*qw],
-        [2*qx*qz - 2*qy*qw, 2*qy*qz + 2*qx*qw, 1 - 2*qx**2 - 2*qy**2]
-    ])
-    return R
-
-def compute_ate(estimated_poses, ground_truth_poses):
-    """Compute Absolute Trajectory Error (ATE)"""
-    if len(estimated_poses) != len(ground_truth_poses):
-        min_len = min(len(estimated_poses), len(ground_truth_poses))
-        estimated_poses = estimated_poses[:min_len]
-        ground_truth_poses = ground_truth_poses[:min_len]
-    
-    # Convert lists to numpy arrays
-    estimated = np.array(estimated_poses)
-    ground_truth = np.array(ground_truth_poses)
-    
-    # Compute error for each pose
-    errors = np.linalg.norm(estimated - ground_truth, axis=1)
-    
-    # Calculate statistics
-    rmse = np.sqrt(np.mean(errors ** 2))
-    mean = np.mean(errors)
-    median = np.median(errors)
-    std = np.std(errors)
-    min_error = np.min(errors)
-    max_error = np.max(errors)
-    
-    return {
-        'rmse': rmse,
-        'mean': mean,
-        'median': median,
-        'std': std,
-        'min': min_error,
-        'max': max_error
-    }
-
-def plot_trajectory_and_map_animated(trajectory, map_points, ground_truth=None, output_file='slam_result.gif'):
+def plot_trajectory_and_map_animated(trajectory, map_points):
     trajectory = np.array(trajectory)
     map_points = np.array(map_points)
-    if ground_truth is not None:
-        ground_truth = np.array(ground_truth)
-        # Scale ground truth to match the scale of estimated trajectory
-        if len(trajectory) > 1 and len(ground_truth) > 1:
-            scale = np.mean(np.linalg.norm(np.diff(trajectory, axis=0), axis=1)) / \
-                   np.mean(np.linalg.norm(np.diff(ground_truth, axis=0), axis=1))
-            ground_truth = ground_truth * scale
 
     fig = plt.figure(figsize=(10, 10))
     ax = fig.add_subplot(111, projection='3d')
-    
-    # Set axis limits based on the data
-    if len(trajectory) > 0:
-        max_range = np.max(np.abs(trajectory))
-        ax.set_xlim(-max_range, max_range)
-        ax.set_ylim(-max_range, max_range)
-        ax.set_zlim(-max_range, max_range)
-    
+    ax.set_xlim(-2, 2)
+    ax.set_ylim(-2, 2)
+    ax.set_zlim(-2, 2)
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
     ax.set_title('SLAM Results')
-    
     scat = ax.scatter([], [], [], c='red', s=1, label='Map Points')
-    traj_line, = ax.plot([], [], [], c='blue', label='Estimated Trajectory')
-    
-    if ground_truth is not None and len(ground_truth) > 1:
-        gt_line, = ax.plot([], [], [], c='green', label='Ground Truth')
-    else:
-        gt_line = None
-    
+    line, = ax.plot([], [], [], c='blue', label='Camera Trajectory')
     ax.legend()
 
     def init():
         scat._offsets3d = ([], [], [])
-        traj_line.set_data([], [])
-        traj_line.set_3d_properties([])
-        if gt_line:
-            gt_line.set_data([], [])
-            gt_line.set_3d_properties([])
-        return (scat, traj_line) if gt_line is None else (scat, traj_line, gt_line)
+        line.set_data([], [])
+        line.set_3d_properties([])
+        return scat, line
 
     def update(i):
         if i == 0:
@@ -209,26 +110,31 @@ def plot_trajectory_and_map_animated(trajectory, map_points, ground_truth=None, 
         traj_i = trajectory[:i+1]
         map_i = map_points[:i*10]  # reduce number of points for smoother animation
 
-        traj_line.set_data(traj_i[:, 0], traj_i[:, 1])
-        traj_line.set_3d_properties(traj_i[:, 2])
-
-        if gt_line and i < len(ground_truth):
-            gt_i = ground_truth[:i+1]
-            gt_line.set_data(gt_i[:, 0], gt_i[:, 1])
-            gt_line.set_3d_properties(gt_i[:, 2])
+        line.set_data(traj_i[:, 0], traj_i[:, 1])
+        line.set_3d_properties(traj_i[:, 2])
 
         if len(map_i) > 0:
             scat._offsets3d = (map_i[:, 0], map_i[:, 1], map_i[:, 2])
 
         ax.view_init(elev=20, azim=i)  # Rotate view for better visualization
-        return (scat, traj_line) if gt_line is None else (scat, traj_line, gt_line)
+        return scat, line
 
     ani = animation.FuncAnimation(fig, update, frames=len(trajectory),
                                 init_func=init, interval=50, blit=False)
-
-    # Save as GIF
-    ani.save(output_file, writer='pillow', fps=20)
     
+    # Save as GIF
+    ani.save('slam_result_2.gif', writer='pillow', fps=20)
+    plt.show()
+
+def plot_trajectory_and_map(trajectory, map_points):
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.plot(*np.array(trajectory).T, label="Camera Trajectory", color='blue')
+    ax.scatter(*np.array(map_points).T, c='red', s=1)
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    ax.set_zlabel('z')
+    plt.legend()
     plt.show()
 
 def calculate_matching_stats(matches, pts1, pts2):
@@ -333,17 +239,9 @@ def run_mini_slam():
     feature_gif_file = f'feature_matching_{file_num}.gif'
     
     print("Starting Mini-SLAM...")
-    orb = cv2.ORB_create(3000)
+    orb = cv2.ORB_create(2000)
     images = load_images(IMAGE_DIR)
     print(f"Loaded {len(images)} images")
-
-    # Load ground truth data
-    try:
-        ground_truth = load_ground_truth_aligned(GROUND_TRUTH_PATH, IMAGE_DIR)
-        print(f"Loaded ground truth data with {len(ground_truth)} poses")
-    except Exception as e:
-        print(f"Could not load ground truth data: {e}")
-        ground_truth = None
 
     # Initialize video writer for feature matching visualization
     first_img = images[0]
@@ -482,24 +380,63 @@ def run_mini_slam():
         print(f"   - Point density: {map_stats['point_density']:.2f}")
         print(f"   - Spatial distribution (std): {np.mean(map_stats['std_position']):.2f}")
 
-    # After the main loop, compute and display ATE if ground truth is available
-    if ground_truth is not None:
-        ate_results = compute_ate(trajectory, ground_truth)
-        print("\n=== Trajectory Evaluation ===")
-        print(f"RMSE: {ate_results['rmse']:.3f} m")
-        print(f"Mean error: {ate_results['mean']:.3f} m")
-        print(f"Median error: {ate_results['median']:.3f} m")
-        print(f"Std dev: {ate_results['std']:.3f} m")
-        print(f"Min error: {ate_results['min']:.3f} m")
-        print(f"Max error: {ate_results['max']:.3f} m")
+    print("\nGenerating visualizations...")
+    
+    # Convert lists to numpy arrays for visualization
+    trajectory_array = np.array(trajectory)
+    map_points_array = np.array(map_points)
+    
+    # Save animated trajectory and map
+    fig = plt.figure(figsize=(10, 10))
+    ax = fig.add_subplot(111, projection='3d')
+    ax.set_xlim(-2, 2)
+    ax.set_ylim(-2, 2)
+    ax.set_zlim(-2, 2)
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title('SLAM Results')
+    scat = ax.scatter([], [], [], c='red', s=1, label='Map Points')
+    line, = ax.plot([], [], [], c='blue', label='Camera Trajectory')
+    ax.legend()
 
-    print("\nGenerating final visualization and saving GIF...")
-    plot_trajectory_and_map_animated(trajectory, map_points, ground_truth, slam_result_file)
+    def init():
+        scat._offsets3d = ([], [], [])
+        line.set_data([], [])
+        line.set_3d_properties([])
+        return scat, line
+
+    def update(i):
+        if i == 0:
+            return init()
+
+        traj_i = trajectory_array[:i+1]
+        if len(map_points_array) > 0:
+            map_i = map_points_array[:min(i*10, len(map_points_array))]
+        else:
+            map_i = np.array([])
+
+        if len(traj_i) > 0:
+            line.set_data(traj_i[:, 0], traj_i[:, 1])
+            line.set_3d_properties(traj_i[:, 2])
+
+        if len(map_i) > 0:
+            scat._offsets3d = (map_i[:, 0], map_i[:, 1], map_i[:, 2])
+
+        ax.view_init(elev=20, azim=i)
+        return scat, line
+
+    ani = animation.FuncAnimation(fig, update, frames=len(trajectory),
+                                init_func=init, interval=50, blit=False)
+    
+    # Save as GIF with numbered filename
+    ani.save(slam_result_file, writer='pillow', fps=20)
+    plt.show()
+    
     print("\nResults saved as:")
     print(f"1. '{slam_result_file}' - 3D trajectory and map visualization")
     print(f"2. '{feature_video_file}' - Feature matching visualization")
     
-    # Convert MP4 to GIF for feature matching visualization
     print("\nConverting feature matching video to GIF...")
     os.system(f"ffmpeg -i {feature_video_file} -vf 'fps=10,scale=800:-1' -y {feature_gif_file}")
     print(f"3. '{feature_gif_file}' - Feature matching visualization (GIF format)")
